@@ -65,6 +65,8 @@ public class KeyStoreHelper {
     public static native byte[] slowHash(byte[] data, int brokenVariant);
 
     static final private String RSA_ALIAS = "MonerujoRSA";
+    static final private String WALLET_PASS_KEY_PREFIX_V2 = "walletKeyV2-";
+    static final private String WALLET_PASS_CIPHERTEXT_V2 = "v2:";
 
     private static String getCrazyPass(Context context, String password, int brokenVariant) {
         byte[] data = password.getBytes(StandardCharsets.UTF_8);
@@ -112,17 +114,18 @@ public class KeyStoreHelper {
     }
 
     public static boolean saveWalletUserPass(@NonNull Context context, String wallet, String password) {
-        String walletKeyAlias = SecurityConstants.WALLET_PASS_KEY_PREFIX + wallet;
+        String walletKeyAlias = WALLET_PASS_KEY_PREFIX_V2 + wallet;
         byte[] data = password.getBytes(StandardCharsets.UTF_8);
         try {
             KeyStoreHelper.createKeys(context, walletKeyAlias);
             byte[] encrypted = KeyStoreHelper.encrypt(walletKeyAlias, data);
             SharedPreferences.Editor e = context.getSharedPreferences(SecurityConstants.WALLET_PASS_PREFS_NAME, Context.MODE_PRIVATE).edit();
             if (encrypted == null) {
-                e.remove(wallet).apply();
                 return false;
             }
-            e.putString(wallet, Base64.encodeToString(encrypted, Base64.DEFAULT)).apply();
+            e.putString(wallet, WALLET_PASS_CIPHERTEXT_V2
+                    + Base64.encodeToString(encrypted, Base64.DEFAULT)).apply();
+            deleteKeys(SecurityConstants.WALLET_PASS_KEY_PREFIX + wallet);
             return true;
         } catch (NoSuchProviderException | NoSuchAlgorithmException |
                 InvalidAlgorithmParameterException | KeyStoreException ex) {
@@ -147,20 +150,71 @@ public class KeyStoreHelper {
     }
 
     public static String loadWalletUserPass(@NonNull Context context, String wallet) throws BrokenPasswordStoreException {
-        String walletKeyAlias = SecurityConstants.WALLET_PASS_KEY_PREFIX + wallet;
-        String encoded = context.getSharedPreferences(SecurityConstants.WALLET_PASS_PREFS_NAME, Context.MODE_PRIVATE)
-                .getString(wallet, "");
+        return decryptWalletUserPass(context, wallet);
+    }
+
+    public static Cipher getWalletUserPassCipher(@NonNull Context context, String wallet)
+            throws BrokenPasswordStoreException {
+        String encoded = getStoredWalletUserPass(context, wallet);
         if (encoded.isEmpty()) throw new BrokenPasswordStoreException();
-        byte[] data = Base64.decode(encoded, Base64.DEFAULT);
-        byte[] decrypted = KeyStoreHelper.decrypt(walletKeyAlias, data);
-        if (decrypted == null) throw new BrokenPasswordStoreException();
-        return new String(decrypted, StandardCharsets.UTF_8);
+        boolean version2 = encoded.startsWith(WALLET_PASS_CIPHERTEXT_V2);
+        String alias = (version2 ? WALLET_PASS_KEY_PREFIX_V2
+                : SecurityConstants.WALLET_PASS_KEY_PREFIX) + wallet;
+        String transformation = version2 ? SecurityConstants.CIPHER_RSA_ECB_OAEP
+                : SecurityConstants.CIPHER_RSA_ECB_PKCS1;
+        try {
+            Cipher cipher = Cipher.getInstance(transformation);
+            cipher.init(Cipher.DECRYPT_MODE, getPrivateKey(alias));
+            return cipher;
+        } catch (NoSuchAlgorithmException | NoSuchPaddingException | InvalidKeyException ex) {
+            throw new BrokenPasswordStoreException(ex);
+        }
+    }
+
+    public static String decryptWalletUserPass(Context context, String wallet, Cipher cipher)
+            throws BrokenPasswordStoreException {
+        String encoded = getStoredWalletUserPass(context, wallet);
+        if (encoded.startsWith(WALLET_PASS_CIPHERTEXT_V2))
+            encoded = encoded.substring(WALLET_PASS_CIPHERTEXT_V2.length());
+        try {
+            return new String(cipher.doFinal(Base64.decode(encoded, Base64.DEFAULT)),
+                    StandardCharsets.UTF_8);
+        } catch (IllegalBlockSizeException | BadPaddingException | RuntimeException ex) {
+            throw new BrokenPasswordStoreException(ex);
+        }
+    }
+
+    private static String getStoredWalletUserPass(Context context, String wallet) {
+        return context.getSharedPreferences(SecurityConstants.WALLET_PASS_PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(wallet, "");
+    }
+
+    private static String decryptWalletUserPass(Context context, String wallet)
+            throws BrokenPasswordStoreException {
+        String encoded = getStoredWalletUserPass(context, wallet);
+        if (encoded.isEmpty()) throw new BrokenPasswordStoreException();
+        Cipher cipher = getWalletUserPassCipher(context, wallet);
+        return decryptWalletUserPass(context, wallet, cipher);
+    }
+
+    public static boolean hasWalletUserPass(@NonNull Context context, String wallet) {
+        if (getStoredWalletUserPass(context, wallet).isEmpty()) return false;
+        try {
+            return keyExists(wallet);
+        } catch (BrokenPasswordStoreException ex) {
+            return false;
+        }
     }
 
     public static void removeWalletUserPass(Context context, String wallet) {
         String walletKeyAlias = SecurityConstants.WALLET_PASS_KEY_PREFIX + wallet;
         try {
             KeyStoreHelper.deleteKeys(walletKeyAlias);
+        } catch (KeyStoreException ex) {
+            Timber.w(ex);
+        }
+        try {
+            deleteKeys(WALLET_PASS_KEY_PREFIX_V2 + wallet);
         } catch (KeyStoreException ex) {
             Timber.w(ex);
         }
@@ -210,7 +264,8 @@ public class KeyStoreHelper {
         try {
             KeyStore keyStore = KeyStore.getInstance(KeyStoreHelper.SecurityConstants.KEYSTORE_PROVIDER_ANDROID_KEYSTORE);
             keyStore.load(null);
-            return keyStore.containsAlias(KeyStoreHelper.SecurityConstants.WALLET_PASS_KEY_PREFIX + wallet);
+            return keyStore.containsAlias(KeyStoreHelper.SecurityConstants.WALLET_PASS_KEY_PREFIX + wallet)
+                    || keyStore.containsAlias(WALLET_PASS_KEY_PREFIX_V2 + wallet);
         } catch (IOException | NoSuchAlgorithmException | CertificateException | KeyStoreException ex) {
             throw new BrokenPasswordStoreException(ex);
         }
@@ -247,9 +302,10 @@ public class KeyStoreHelper {
         keyPairGenerator.initialize(
                 new KeyGenParameterSpec.Builder(
                         alias, KeyProperties.PURPOSE_SIGN | KeyProperties.PURPOSE_ENCRYPT | KeyProperties.PURPOSE_DECRYPT)
-                        .setDigests(KeyProperties.DIGEST_SHA256)
+                        .setDigests(KeyProperties.DIGEST_SHA1, KeyProperties.DIGEST_SHA256)
                         .setSignaturePaddings(KeyProperties.SIGNATURE_PADDING_RSA_PKCS1)
-                        .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_RSA_PKCS1)
+                        .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_RSA_OAEP)
+                        .setUserAuthenticationRequired(alias.startsWith(WALLET_PASS_KEY_PREFIX_V2))
                         .build());
         KeyPair keyPair = keyPairGenerator.generateKeyPair();
         Timber.d("M Keys created");
@@ -297,27 +353,12 @@ public class KeyStoreHelper {
     private static byte[] encrypt(String alias, byte[] data) {
         try {
             PublicKey publicKey = getPublicKey(alias);
-            Cipher cipher = Cipher.getInstance(SecurityConstants.CIPHER_RSA_ECB_PKCS1);
+            Cipher cipher = Cipher.getInstance(SecurityConstants.CIPHER_RSA_ECB_OAEP);
 
             cipher.init(Cipher.ENCRYPT_MODE, publicKey);
             return cipher.doFinal(data);
         } catch (InvalidKeyException | IllegalBlockSizeException | BadPaddingException
                 | NoSuchAlgorithmException | NoSuchPaddingException ex) {
-            Timber.e(ex);
-            return null;
-        }
-    }
-
-    private static byte[] decrypt(String alias, byte[] data) {
-        try {
-            PrivateKey privateKey = getPrivateKey(alias);
-            if (privateKey == null) return null;
-            Cipher cipher = Cipher.getInstance(SecurityConstants.CIPHER_RSA_ECB_PKCS1);
-
-            cipher.init(Cipher.DECRYPT_MODE, privateKey);
-            return cipher.doFinal(data);
-        } catch (NoSuchAlgorithmException | NoSuchPaddingException | InvalidKeyException |
-                IllegalBlockSizeException | BadPaddingException ex) {
             Timber.e(ex);
             return null;
         }
@@ -344,6 +385,7 @@ public class KeyStoreHelper {
         String KEYSTORE_PROVIDER_ANDROID_KEYSTORE = "AndroidKeyStore";
         String TYPE_RSA = "RSA";
         String SIGNATURE_SHA256withRSA = "SHA256withRSA";
+        String CIPHER_RSA_ECB_OAEP = "RSA/ECB/OAEPWithSHA-1AndMGF1Padding";
         String CIPHER_RSA_ECB_PKCS1 = "RSA/ECB/PKCS1Padding";
         String WALLET_PASS_PREFS_NAME = "wallet";
         String WALLET_PASS_KEY_PREFIX = "walletKey-";

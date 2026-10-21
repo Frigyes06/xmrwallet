@@ -408,6 +408,8 @@ public class LoginActivity extends BaseActivity
 
     // copy + delete seems safer than rename because we can rollback easily
     boolean renameWallet(File walletFile, String newName) {
+        if (!Helper.isWalletFile(this, walletFile) || !Helper.isSafeWalletName(newName))
+            return false;
         if (copyWallet(walletFile, new File(walletFile.getParentFile(), newName), false, true)) {
             try {
                 KeyStoreHelper.copyWalletUserPass(this, walletFile.getName(), newName);
@@ -1012,6 +1014,7 @@ public class LoginActivity extends BaseActivity
 
     @Override
     public void onAccept(final String name, final String password) {
+        if (!Helper.isSafeWalletName(name)) return;
         File walletFolder = getStorageRoot();
         File walletFile = new File(walletFolder, name);
         Timber.d("New Wallet %s", walletFile.getAbsolutePath());
@@ -1023,6 +1026,7 @@ public class LoginActivity extends BaseActivity
     }
 
     boolean walletExists(File walletFile, boolean any) {
+        if (!Helper.isWalletFile(this, walletFile)) return false;
         File dir = walletFile.getParentFile();
         String name = walletFile.getName();
         if (any) {
@@ -1037,6 +1041,8 @@ public class LoginActivity extends BaseActivity
     }
 
     boolean copyWallet(File srcWallet, File dstWallet, boolean overwrite, boolean ignoreCacheError) {
+        if (!Helper.isWalletFile(this, srcWallet) || !Helper.isWalletFile(this, dstWallet))
+            return false;
         if (walletExists(dstWallet, true) && !overwrite) return false;
         boolean success = false;
         File srcDir = srcWallet.getParentFile();
@@ -1065,6 +1071,7 @@ public class LoginActivity extends BaseActivity
 
     // do our best to delete as much as possible of the wallet files
     boolean deleteWallet(File walletFile) {
+        if (!Helper.isWalletFile(this, walletFile)) return false;
         Timber.d("deleteWallet %s", walletFile.getAbsolutePath());
         File dir = walletFile.getParentFile();
         String name = walletFile.getName();
@@ -1084,6 +1091,7 @@ public class LoginActivity extends BaseActivity
     }
 
     boolean deleteWalletCache(File walletFile) {
+        if (!Helper.isWalletFile(this, walletFile)) return false;
         Timber.d("deleteWalletCache %s", walletFile.getAbsolutePath());
         File dir = walletFile.getParentFile();
         String name = walletFile.getName();
