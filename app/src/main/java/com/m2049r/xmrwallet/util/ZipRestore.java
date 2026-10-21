@@ -1,11 +1,13 @@
 package com.m2049r.xmrwallet.util;
 
+import android.content.ContentResolver;
 import android.content.Context;
 import android.net.Uri;
 
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -25,6 +27,8 @@ public class ZipRestore {
     private ZipInputStream zip;
 
     public boolean restore() throws IOException {
+        if (!isContentUri(zipUri))
+            throw new IOException("Invalid restore URI");
         walletRoot = Helper.getWalletRoot(context);
         String walletName = testArchive();
         if (walletName == null) return false;
@@ -34,7 +38,9 @@ public class ZipRestore {
         if (zip != null)
             throw new IllegalStateException("zip already initialized");
         try {
-            zip = new ZipInputStream(context.getContentResolver().openInputStream(zipUri));
+            InputStream input = context.getContentResolver().openInputStream(zipUri);
+            if (input == null) throw new IOException("Unable to open restore URI");
+            zip = new ZipInputStream(input);
             for (ZipEntry entry = zip.getNextEntry(); entry != null; zip.closeEntry(), entry = zip.getNextEntry()) {
                 File destination;
                 final String name = entry.getName();
@@ -54,6 +60,9 @@ public class ZipRestore {
     }
 
     private void writeFile(File destination) throws IOException {
+        String rootPath = walletRoot.getCanonicalPath() + File.separator;
+        if (!destination.getCanonicalPath().startsWith(rootPath))
+            throw new IOException("Invalid archive destination");
         try (OutputStream os = new FileOutputStream(destination)) {
             byte[] buffer = new byte[8192];
             int length;
@@ -69,13 +78,16 @@ public class ZipRestore {
         boolean keys = false;
         ZipInputStream zipStream = null;
         try {
-            zipStream = new ZipInputStream(context.getContentResolver().openInputStream(zipUri));
+            if (!isContentUri(zipUri)) return null;
+            InputStream input = context.getContentResolver().openInputStream(zipUri);
+            if (input == null) return null;
+            zipStream = new ZipInputStream(input);
             for (ZipEntry entry = zipStream.getNextEntry(); entry != null;
                  zipStream.closeEntry(), entry = zipStream.getNextEntry()) {
                 if (entry.isDirectory())
                     return null;
                 final String name = entry.getName();
-                if ((new File(name)).getParentFile() != null)
+                if (!Helper.isSafeWalletName(name))
                     return null;
                 if (walletName == null) {
                     if (name.endsWith(".keys")) {
@@ -105,8 +117,13 @@ public class ZipRestore {
             }
         }
         // we need the keys at least
-        if (keys) return walletName;
+        if (keys && Helper.isSafeWalletName(walletName)) return walletName;
         else return null;
+    }
+
+    private static boolean isContentUri(Uri uri) {
+        return uri != null && ContentResolver.SCHEME_CONTENT.equals(uri.getScheme())
+                && uri.getAuthority() != null && !uri.getAuthority().isEmpty();
     }
 
     final static Pattern WALLET_PATTERN = Pattern.compile("^(.+) \\(([0-9]+)\\).keys$");

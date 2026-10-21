@@ -94,4 +94,14 @@ public class HelperTest {
         assertTrue("1.0".equals(Helper.getDisplayAmount(1d)));
         assertTrue("0.0".equals(Helper.getDisplayAmount(0d)));
     }
+
+    @Test
+    public void testSafeWalletName() {
+        assertTrue(Helper.isSafeWalletName("wallet-1 (backup)"));
+        assertTrue(!Helper.isSafeWalletName(""));
+        assertTrue(!Helper.isSafeWalletName("."));
+        assertTrue(!Helper.isSafeWalletName(".."));
+        assertTrue(!Helper.isSafeWalletName("../wallet"));
+        assertTrue(!Helper.isSafeWalletName("folder\\wallet"));
+    }
 }

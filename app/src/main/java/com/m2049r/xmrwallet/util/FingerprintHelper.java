@@ -22,6 +22,8 @@ import android.hardware.fingerprint.FingerprintManager;
 import android.os.Build;
 import android.os.CancellationSignal;
 
+import javax.crypto.Cipher;
+
 public class FingerprintHelper {
 
     public static boolean isDeviceSupported(Context context) {
@@ -39,15 +41,11 @@ public class FingerprintHelper {
     }
 
     public static boolean isFingerPassValid(Context context, String wallet) {
-        try {
-            KeyStoreHelper.loadWalletUserPass(context, wallet);
-            return true;
-        } catch (KeyStoreHelper.BrokenPasswordStoreException ex) {
-            return false;
-        }
+        return KeyStoreHelper.hasWalletUserPass(context, wallet);
     }
 
     public static void authenticate(Context context, CancellationSignal cancelSignal,
+                                    Cipher cipher,
                                     FingerprintManager.AuthenticationCallback callback) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
             return;
@@ -55,7 +53,8 @@ public class FingerprintHelper {
 
         FingerprintManager manager = context.getSystemService(FingerprintManager.class);
         if (manager != null) {
-            manager.authenticate(null, cancelSignal, 0, callback, null);
+            manager.authenticate(new FingerprintManager.CryptoObject(cipher), cancelSignal, 0,
+                    callback, null);
         }
     }
 }

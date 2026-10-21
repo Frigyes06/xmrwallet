@@ -128,10 +128,27 @@ public class Helper {
     }
 
     static public File getWalletFile(Context context, String aWalletName) {
+        if (!isSafeWalletName(aWalletName))
+            throw new IllegalArgumentException("Invalid wallet name");
         File walletDir = getWalletRoot(context);
         File f = new File(walletDir, aWalletName);
         Timber.d("wallet=%s size= %d", f.getAbsolutePath(), f.length());
         return f;
+    }
+
+    public static boolean isSafeWalletName(String name) {
+        return name != null && !name.isEmpty() && !name.equals(".") && !name.equals("..")
+                && name.indexOf('/') < 0 && name.indexOf('\\') < 0 && name.indexOf('\0') < 0;
+    }
+
+    public static boolean isWalletFile(Context context, File walletFile) {
+        if (walletFile == null || !isSafeWalletName(walletFile.getName())) return false;
+        try {
+            return walletFile.getCanonicalFile().getParentFile()
+                    .equals(getWalletRoot(context).getCanonicalFile());
+        } catch (IOException ex) {
+            return false;
+        }
     }
 
     static public void showKeyboard(Activity act) {
@@ -511,7 +528,8 @@ public class Helper {
                 @Override
                 public void onAuthenticationSucceeded(FingerprintManager.AuthenticationResult result) {
                     try {
-                        String userPass = KeyStoreHelper.loadWalletUserPass(context, wallet);
+                        String userPass = KeyStoreHelper.decryptWalletUserPass(
+                                context, wallet, result.getCryptoObject().getCipher());
                         if (passwordTask == null) {
                             passwordTask = new PasswordTask(userPass, true);
                             passwordTask.execute();
@@ -535,7 +553,13 @@ public class Helper {
                 tvOpenPrompt.setCompoundDrawablesRelativeWithIntrinsicBounds(icFingerprint, null, null, null);
                 tvOpenPrompt.setText(context.getText(R.string.prompt_fingerprint_auth));
                 tvOpenPrompt.setVisibility(View.VISIBLE);
-                FingerprintHelper.authenticate(context, cancelSignal, fingerprintAuthCallback);
+                try {
+                    FingerprintHelper.authenticate(context, cancelSignal,
+                            KeyStoreHelper.getWalletUserPassCipher(context, wallet),
+                            fingerprintAuthCallback);
+                } catch (KeyStoreHelper.BrokenPasswordStoreException ex) {
+                    tvOpenPrompt.setVisibility(View.GONE);
+                }
             } else {
                 etPassword.requestFocus();
             }
