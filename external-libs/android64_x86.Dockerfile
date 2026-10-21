@@ -1,7 +1,19 @@
-FROM debian:stable
+# Keep the base older than the APT snapshot: newer installed libc/Perl packages
+# cannot satisfy the exact-version dependencies in an older snapshot.
+FROM debian:bullseye-20240513 AS build-deps
 
-RUN set -x && apt-get update && apt-get install -y unzip automake build-essential curl file pkg-config git python3 python-is-python3 libtool libtinfo5 yacc
+RUN set -x \
+    && rm -f /etc/apt/sources.list.d/* \
+    && rm -rf /var/lib/apt/lists/* \
+    && printf '%s\n' \
+        'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20240601T000000Z bullseye main' \
+        'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20240601T000000Z bullseye-updates main' \
+        'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/20240601T000000Z bullseye-security main' \
+        > /etc/apt/sources.list \
+    && apt-get -o APT::Update::Error-Mode=any -o Acquire::Retries=3 update \
+    && apt-get install -y ca-certificates unzip automake build-essential curl file pkg-config git python3 python-is-python3 libtool libtinfo5 bison
 
+FROM build-deps AS build
 WORKDIR /opt/android
 ## INSTALL ANDROID SDK
 ENV ANDROID_SDK_REVISION=4333796
@@ -49,13 +61,15 @@ ENV PATH=/usr/cmake-${CMAKE_VERSION}-Linux-x86_64/bin:$PATH
 ARG BOOST_VERSION=1_70_0
 ARG BOOST_VERSION_DOT=1.70.0
 ARG BOOST_HASH=430ae8354789de4fd19ee52f3b1f739e1fba576f0aded0897c3c2bc00fb38778
-RUN set -x \
-    && curl -L -o  boost_${BOOST_VERSION}.tar.bz2 https://boostorg.jfrog.io/artifactory/main/release/${BOOST_VERSION_DOT}/source/boost_${BOOST_VERSION}.tar.bz2 \
-    && echo "${BOOST_HASH}  boost_${BOOST_VERSION}.tar.bz2" | sha256sum -c \
-    && tar -xvf boost_${BOOST_VERSION}.tar.bz2 \
-    && rm -f boost_${BOOST_VERSION}.tar.bz2 \
-    && cd boost_${BOOST_VERSION} \
-    && ./bootstrap.sh --prefix=${PREFIX}
+RUN set -eux; \
+    curl -fL --retry 3 \
+        -o boost_${BOOST_VERSION}.tar.bz2 \
+        https://archives.boost.io/release/${BOOST_VERSION_DOT}/source/boost_${BOOST_VERSION}.tar.bz2; \
+    echo "${BOOST_HASH}  boost_${BOOST_VERSION}.tar.bz2" | sha256sum -c -; \
+    tar -xjf boost_${BOOST_VERSION}.tar.bz2; \
+    rm -f boost_${BOOST_VERSION}.tar.bz2; \
+    cd boost_${BOOST_VERSION}; \
+    ./bootstrap.sh --prefix="${PREFIX}"
 
 ENV HOST_PATH=$PATH
 ENV PATH=$TOOLCHAIN_DIR/x86_64-linux-android/bin:$TOOLCHAIN_DIR/bin:$PATH
@@ -66,7 +80,7 @@ ARG NPROC=4
 ENV ICONV_VERSION=1.16
 ENV ICONV_HASH=e6a1b1b589654277ee790cce3734f07876ac4ccfaecbee8afa0b649cf529cc04
 RUN set -x \
-    && curl -O http://ftp.gnu.org/pub/gnu/libiconv/libiconv-${ICONV_VERSION}.tar.gz \
+    && curl -fL --retry 3 -O https://ftp.gnu.org/gnu/libiconv/libiconv-${ICONV_VERSION}.tar.gz \
     && echo "${ICONV_HASH}  libiconv-${ICONV_VERSION}.tar.gz" | sha256sum -c \
     && tar -xzf libiconv-${ICONV_VERSION}.tar.gz \
     && rm -f libiconv-${ICONV_VERSION}.tar.gz \
@@ -83,7 +97,7 @@ RUN set -x \
 ENV ZLIB_VERSION=1.3.1
 ENV ZLIB_HASH=9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23
 RUN set -x \
-    && curl -O https://zlib.net/zlib-${ZLIB_VERSION}.tar.gz \
+    && curl -fL --retry 3 -O https://zlib.net/fossils/zlib-${ZLIB_VERSION}.tar.gz \
     && echo "${ZLIB_HASH}  zlib-${ZLIB_VERSION}.tar.gz" | sha256sum -c \
     && tar -xzf zlib-${ZLIB_VERSION}.tar.gz \
     && rm zlib-${ZLIB_VERSION}.tar.gz \
@@ -124,13 +138,15 @@ RUN set -x \
     && make install
 
 # Sodium
-ARG SODIUM_VERSION=1.0.18
-ARG SODIUM_HASH=4f5e89fa84ce1d178a6765b8b46f2b6f91216677
+ARG SODIUM_VERSION=1.0.18-FINAL
+ARG SODIUM_HASH=45b09a607d596e40adbff9ab812e47d85175c053
 RUN set -x \
     && git clone https://github.com/jedisct1/libsodium.git -b ${SODIUM_VERSION} \
     && cd libsodium \
     && test `git rev-parse HEAD` = ${SODIUM_HASH} || exit 1 \
-    && ./autogen.sh \
+    && DO_NOT_UPDATE_CONFIG_SCRIPTS=1 ./autogen.sh \
+    && cp /usr/share/misc/config.guess build-aux/config.guess \
+    && cp /usr/share/misc/config.sub build-aux/config.sub \
     && CC=clang CXX=clang++ ./configure --prefix=${PREFIX} --host=x86_64-linux-android --enable-static --disable-shared \
     && make  -j${NPROC} \
     && make install
