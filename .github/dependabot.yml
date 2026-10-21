@@ -1,0 +1,57 @@
+# To get started with Dependabot version updates, you'll need to specify which
+# package ecosystems to update and where the package manifests are located.
+# Please see the documentation for all configuration options:
+# https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+
+version: 2
+
+updates:
+  # Root and app Gradle files, plus gradle/wrapper/gradle-wrapper.properties.
+  # This covers the Android Gradle Plugin, AndroidX, Java libraries, and the
+  # Gradle wrapper. Native Monero libraries are built separately and are not
+  # represented by a checked-in package manifest.
+  - package-ecosystem: "gradle"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "America/Los_Angeles"
+    open-pull-requests-limit: 8
+    versioning-strategy: "increase"
+    rebase-strategy: "auto"
+    labels:
+      - "dependencies"
+      - "gradle"
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    groups:
+      gradle-non-major:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # The native-library toolchain uses four Dockerfiles in external-libs/.
+  # Dependabot will monitor their FROM images; versions downloaded inside the
+  # Dockerfiles are not package-manager manifests and remain maintainer-owned.
+  - package-ecosystem: "docker"
+    directory: "/external-libs"
+    schedule:
+      interval: "monthly"
+      day: "monday"
+      time: "09:30"
+      timezone: "America/Los_Angeles"
+    open-pull-requests-limit: 4
+    rebase-strategy: "auto"
+    labels:
+      - "dependencies"
+      - "docker"
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    groups:
+      docker-images:
+        update-types:
+          - "minor"
+          - "patch"
